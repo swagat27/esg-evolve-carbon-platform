@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { authClient, useSession } from "@/lib/auth-client";
+import { motion } from "framer-motion";
+import Image from "next/image";
 
 type DashboardSummary = {
   kycStatus: string;
