@@ -49,3 +49,25 @@ export const alerts = sqliteTable('alerts', {
   isRead: integer('is_read', { mode: 'boolean' }).default(false),
   createdAt: text('created_at').notNull(),
 });
+
+export const tradeOrders = sqliteTable('trade_orders', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  listingId: integer('listing_id').references(() => carbonListings.id),
+  buyerOrgId: integer('buyer_org_id').references(() => organizations.id).notNull(),
+  sellerOrgId: integer('seller_org_id').references(() => organizations.id).notNull(),
+  volumeTco2e: real('volume_tco2e').notNull(),
+  pricePerTon: real('price_per_ton').notNull(),
+  status: text('status').notNull().default('PENDING'),
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+});
+
+export const escrows = sqliteTable('escrows', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  orderId: integer('order_id').references(() => tradeOrders.id).notNull(),
+  amount: real('amount').notNull(),
+  currency: text('currency').notNull().default('USD'),
+  status: text('status').notNull().default('HELD'),
+  createdAt: integer('created_at').notNull(),
+  releasedAt: integer('released_at'),
+});

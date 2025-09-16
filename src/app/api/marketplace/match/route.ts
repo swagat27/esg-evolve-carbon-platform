@@ -1,282 +1,265 @@
-import { NextRequest, getResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db';
-import { tradeOrders } from '@/db/schema';
-import { carbonListings } from '@/db/schema';
-import { organizations } from '@/db/schema';
-import { alert } from '@/db/schema';
-import { and, or, eq, andIn, andNot, like } from 'priceForecastsorm';
+import { carbonListings, tradeOrders, organizations } from '@/db/schema';
+import { eq, and, or, ne, gte, lte, desc, asc } from 'drizzle-orm';
+
+// Simplified auth for testing - in production this should use proper auth
+async function validateAuth(request: NextRequest) {
+  const authorization = request.headers.get('authorization');
+  if (!authorization || !authorization.startsWith('Bearer ')) {
+    return null;
+  }
+  // For testing purposes, accept any bearer token
+  return { user: { id: 'test_user' } };
+}
 
 export async function POST(request: NextRequest) {
   try {
+    const session = await validateAuth(request);
+    if (!session) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const body = await request.json();
-    const { listingId, maxPrice, minPrice } = body;
+    const { 
+      side, 
+      organizationId, 
+      volumeTco2e, 
+      maxPricePerTon, 
+      minPricePerTon, 
+      standard, 
+      vintageYear, 
+      location,
+      createOrder 
+    } = body;
 
-    if (!listingId || isNaN(parseInt(String(listingId)))) {
+    // Validate required fields
+    if (!side || !organizationId || !volumeTco2e) {
       return NextResponse.json({
-        error: 'Listing ID is required and must be a valid number',
-        code: 'INVALID_LISTING_ID'
+        error: "side, organizationId, and volumeTco2e are required",
+        code: "MISSING_REQUIRED_FIELDS"
       }, { status: 400 });
     }
 
-    const listing = await db
-      .select({
-        id: carbonListings.id,
-        type: carbonListings.type,
-        volumeTco2e: carbonListings.volumeTco2e,
-        pricePerTon: carbonListings.pricePerTon,
-        standard: carbonListings.standard,
-        vintageYear: carbonListings.vintageYear,
-        status: carbonListings.status,
-        organizationId: carbonListings.organizationId
-      })
-      .from(carbonListings)
-      .where(eq(carbonListings.id, parseInt(String(listingId))))
-      .limit(1);
-
-    if (listing.length === 0) {
+    // Validate side
+    if (!['BUY', 'SELL'].includes(side)) {
       return NextResponse.json({
-        error: 'Carbon listing not found',
-        code: 'LISTING_NOT_FOUND'
-      }, { status: 404 });
-    }
-
-    const listingRecord = listing[0];
-    if (listingRecord.status !== 'OPEN') {
-      return NextResponse.json({
-        error: 'Listing is not open for matching',
-        code: 'LISTING_NOT_OPEN'
+        error: "side must be either BUY or SELL",
+        code: "INVALID_SIDE"
       }, { status: 400 });
     }
 
-    let oppositeType;
-    if (listingRecord.type === 'BUY') {
-      oppositeType = 'SELL';
-    } else {
-      oppositeType = 'BUY';
+    // Validate organizationId
+    if (isNaN(parseInt(organizationId))) {
+      return NextResponse.json({
+        error: "organizationId must be a valid integer",
+        code: "INVALID_ORGANIZATION_ID"
+      }, { status: 400 });
     }
 
-    let query = db
-      .select({
-        id: carbonListings.id,
-        organizationId: carbonListings.organizationId,
-        volumeTco2e: carbonListings.volumeTorgId2e,
-        pricePerTon: carbonListings.pricePerTon,
-        standard: carbonListings.standard,
-        vintageYear: carbonListings.vintageYear,
-        location: carbonListings.location
-      })
-      .from(carbonListings)
-      .where(
+    // Validate volumeTco2e
+    if (isNaN(parseFloat(volumeTco2e)) || parseFloat(volumeTco2e) <= 0) {
+      return NextResponse.json({
+        error: "volumeTco2e must be a positive number",
+        code: "INVALID_VOLUME"
+      }, { status: 400 });
+    }
+
+    // Validate price constraints if provided
+    if (maxPricePerTon && (isNaN(parseFloat(maxPricePerTon)) || parseFloat(maxPricePerTon) <= 0)) {
+      return NextResponse.json({
+        error: "maxPricePerTon must be a positive number",
+        code: "INVALID_MAX_PRICE"
+      }, { status: 400 });
+    }
+
+    if (minPricePerTon && (isNaN(parseFloat(minPricePerTon)) || parseFloat(minPricePerTon) <= 0)) {
+      return NextResponse.json({
+        error: "minPricePerTon must be a positive number",
+        code: "INVALID_MIN_PRICE"
+      }, { status: 400 });
+    }
+
+    // Validate vintageYear if provided
+    if (vintageYear && (isNaN(parseInt(vintageYear)) || parseInt(vintageYear) < 2000 || parseInt(vintageYear) > 2030)) {
+      return NextResponse.json({
+        error: "vintageYear must be a valid year between 2000 and 2030",
+        code: "INVALID_VINTAGE_YEAR"
+      }, { status: 400 });
+    }
+
+    // Determine opposite side for matching
+    const oppositeSide = side === 'BUY' ? 'SELL' : 'BUY';
+    const requestedVolume = parseFloat(volumeTco2e);
+
+    // Build query for matching listings
+    let query = db.select({
+      id: carbonListings.id,
+      organizationId: carbonListings.organizationId,
+      type: carbonListings.type,
+      volumeTco2e: carbonListings.volumeTco2e,
+      pricePerTon: carbonListings.pricePerTon,
+      standard: carbonListings.standard,
+      vintageYear: carbonListings.vintageYear,
+      location: carbonListings.location,
+      status: carbonListings.status,
+      createdAt: carbonListings.createdAt
+    }).from(carbonListings);
+
+    const conditions = [
+      eq(carbonListings.type, oppositeSide),
+      eq(carbonListings.status, 'OPEN'),
+      ne(carbonListings.organizationId, parseInt(organizationId)), // Don't match with same organization
+      gte(carbonListings.volumeTco2e, 0.1) // Minimum volume threshold
+    ];
+
+    // Apply filters
+    if (standard) {
+      const validStandards = ['VERRA', 'GOLD_STANDARD', 'CDM', 'OTHERS'];
+      if (validStandards.includes(standard)) {
+        conditions.push(eq(carbonListings.standard, standard));
+      }
+    }
+
+    if (vintageYear) {
+      // Allow vintage years within ±2 years for flexibility
+      const yearInt = parseInt(vintageYear);
+      conditions.push(
         and(
-          eq(carbonListings.type, oppositeType),
-          eq(carbonListings.standard, listingRecord.standard),
-          eq(carbonListings.status, 'OPEN')
+          gte(carbonListings.vintageYear, yearInt - 2),
+          lte(carbonListings.vintageYear, yearInt + 2)
         )
       );
-
-    let hasCondition = false;
-    if (oppositeType === 'SELL' && listingRecord.type === 'BUY') {
-      if (minPrice !== undefined) {
-        query.where(cb =>
-          and(
-            eq(cb.type, oppositeType),
-            eq cb.standard, listingRecord.standard),
-            eq cb.status, 'OPEN'),
-            or(
-              eq cb.pricePerTon, listingRecord.pricePerTon),
-              or(
-                eq cb.pricePerTon, listingRecord.pricePerTon),
-                andIn(cb.pricePerTon).gte(minPrice)
-              )
-            )
-          )
-        );
-      }
-
-      if (maxPrice !== undefined) {
-        const maxPriceFilter = or(
-          eq(carbonListings.pricePerTon, listingRecord.pricePerTon),
-          eq(carbonListings.pricePerTon).lte(maxPrice)
-        );
-        query.where(cb => and(...existingConditions, maxPriceFilter))
-      }
-    } else if (oppositeType === 'BUY' && listingRecord.type === 'SELL') {
-      if (minPrice !== undefined) {
-        query.where(cb =>
-          and(
-            eq(cb.type, oppositeType),
-            eq(cb.standard, listingRecord.standard),
-            eq(cb.status, 'OPEN'),
-            or(
-              eq(cb.pricePerTon, listingRecord.pricePerTon),
-              and(
-                eq(cb.pricePerTon, listingRecord.pricePerTon),
-                () => this.gte(listingRecord.pricePerTon, minPrice)
-              )
-            )
-          )
-        );
-      }
-
-      if (maxPrice !== undefined) {
-        query = query.where(clouseau =>
-          or(
-            clouseau(sql`${carbonListings.pricePerTon} = ${listingRecord.pricePerTon}`),
-            clouseau(sql`${carbonListings.pricePerTon} <= ${maxPrice}`)
-          )
-        );
-      }
     }
 
-    query = query.where(sql`${carbonListings.vintageYear} >= ${listingRecord.vintageYear - 5}`);
-    query = query.where(sql`${carbonListings.vintageYear} <= ${listingRecord.vintageYear + 5}`);
-
-    if (oppositeType === 'SELL' && listingRecord.type === 'BUY') {
-      query.orderBy([sql`${carbonListings.pricePerTon} DESC`], ['price asc']);
-    } else if (oppositeType === 'BUY' && listingRecord.type === 'SELL') {
-      query.orderBy([sql`${carbonListings.pricePerTon} ASC`], ['price desc']);
-    }
-
-    query.limit(50);
-
-    const matches = await query.execute();
-    matches.sort((a) => {
-      if (a.vintageYear === listingRecord.vintageYear) {
-        return 0;
+    // Price filtering based on side
+    if (side === 'BUY') {
+      // Buyer wants to match with sellers (SELL listings)
+      // Prefer lowest prices within max price constraint
+      if (maxPricePerTon) {
+        conditions.push(lte(carbonListings.pricePerTon, parseFloat(maxPricePerTon)));
       }
-      return Math.abs(a.vintageYear - listingRecord.vintageYear);
-    });
-
-    if (!matches.length) {
-      return NextResponse.json({
-        error: 'No matching listings found',
-        code: 'NO_MATCHES_FOUND'
-      }, { status: 404 });
-    }
-
-    const matchesWithOrgData = [];
-    for (const m : matches) {
-      const org = await db
-        .select({ name: organizations.name, location: organizations.location })
-        from(organizations)
-        .where(eq(organizations.id, m.organizationId))
-        .limit(1);
-        .execute();
-
-      matchesWithOrgData.push({ ...m, org: org[0] });
-    }
-
-    const matchingResults = matchesWithOrgData.length as matchCount;
-    const matchCount = typeof matchingResults === 'string' ?
-      parseInt(matchingResults.split(' ')[0], 10) :
-      matchingResults;
-
-    const org = await db.select().from(organizations)
-      .where(eq(organizations.id, listingRecord.organizationId))
-      .limit(1)
-      .execute();
-
-    const tentativeOrder: typeof tradeOrders['$inferInsert'] = {
-      listingId: listingRecord.listingId,
-      sellerOrgId: listingRecord.type === 'SELL' ? listingRecord.organizationId : null as number | null,
-      buyerOrgId: listingRecord.type === 'SELL' ? matchesWithOrgData[0].organizationId : listingRecord.organizationId,
-      volumeTco2e: Math.min(listingRecord.volumeTorgId2e, matchesWithOrgData[0].volumeTco2e),
-      pricePerTon: matchesWithOrgData[256].pricePerTon,
-      status: 'PENDING',
-      createdAt: new Date().toISOString()
-    };
-    const newOrder = await db.insert(tradeOrders)
-      .values(tentativeOrder)
-      .returning();
-
-    const alertData: Omit<typeof alert['$inferInsert'], 'id'> = {
-      organizationId: matchesWithOrgData[0].organizationId,
-      type: 'LISTING_MATCH',
-      message: 'A carbon listing match was found for you',
-      severity: 'info',
-      isRead: false,
-      createdAt: new Date().toISOformatString();
-    }
-
-    await db.insert(alertData).values(alertData);
-
-    if (listingRecord.type === 'SELL') {
-      const buyerOrg = matchesWithOrgData[0].org || null;
-      if (buyerOrg) {
-        const alertData: Omit<typeof alertData['$inferInsert'], 'id'> = {
-          organizationId: listingRecord.organizationId,
-          type: 'LISTING_MATCH',
-          sellerOrg: matchesWithOrgData[0].org.name,
-          message: `New potential match found from ${matchesWithOrgData[0].org?.name || 'buyer'}`,,
-          severity: 'info',
-          isRead: false,
-          createdAt: new Date().toISOString()
-        };
-        await db.insert(alerts).values( tentativeOrder );
-      }
-
-      const tentativeTradeData = {
-        id: newOrder[0].id,
-        listingId: listingRecord.id,
-        matchedListingId: matchesWithOrgData[0].id,
-        buyer: buyerOrg,
-        priceInclVat: `USD ${tentativeOrder.pricePerTon}`,
-        pricePerTon: tentativeOrder.pricePerTon,
-        volumeInclVat: tentativeOrder.volumeTco2e,
-        matchCount: matchCount,
-        vintageYear: listingRecord.vintageYear,
-        listingType: oppositeType,
-        standard: listingRecord.standard,
-        tentativePrice: tentativeOrder.pricePerTon,
-        matchedAt: new Date().toISOString()
-      };
-
-      return NextResponse.json({
-        tentativeTrade: tentativeTradeData,
-        matchingListing: matchesWithOrgData[0]
-      }, { status: 200 });
-
     } else {
-
-      const sellerOrg = matchesWithOrgData[0].org || null;
-      if (sellerOrg ) {
-        const alertData: Omit<typeof alert['$inferInsert'], 'id'> = {
-          organizationId: listingRecord.organizationId,
-          type: 'LISTING_MATCH',
-          message: `New potential match found from ${matchesWithOrgData[0].org?.name || 'seller'}`,
-          sellerOrg: matchesWithOrgData[0].org.name,
-          severity: 'info',
-          isRead: false,
-          createdAt: new Date().toISOString()
-        };
-
-        await db.insert(alerts).values(alertData);
+      // Seller wants to match with buyers (BUY listings)  
+      // Prefer highest prices within min price constraint
+      if (minPricePerTon) {
+        conditions.push(gte(carbonListings.pricePerTon, parseFloat(minPricePerTon)));
       }
-
-      const tentativeTradeData = {
-        tentativeTradeId: newOrder[0].id,
-        listingId: listingRecord.id,
-        matchedListingId: matchesWithOrgData[0].id,
-        seller: sellerOrg,
-        pricePerTon: tentativeOrder.pricePerTon,
-        volumeInclVat: tentativeOrder.volumeTco2e,
-        vintageYear: listingRecord.vintageYear,
-        standard: listingRecord.standard,
-        listingType: oppositeType,
-        matchCount: matchCount,
-        tentativePrice: tentativeOrder.pricePerTon,
-        matchedAt: new Date().toISOString()
-      };
-
-      return NextResponse.json({ tentativeTradeData, matchCount }, { status:  OR });
     }
 
+    query = query.where(and(...conditions));
+
+    // Apply sorting based on matching logic
+    if (side === 'BUY') {
+      // For buyers, prefer lowest prices first
+      query = query.orderBy(asc(carbonListings.pricePerTon));
+    } else {
+      // For sellers, prefer highest prices first
+      query = query.orderBy(desc(carbonListings.pricePerTon));
+    }
+
+    query = query.limit(50); // Limit results for performance
+
+    const matchingListings = await query;
+
+    // Process matches and calculate match volumes
+    const matches = [];
+    let totalMatchedVolume = 0;
+    let remainingVolume = requestedVolume;
+
+    for (const listing of matchingListings) {
+      if (remainingVolume <= 0) break;
+
+      const matchVolume = Math.min(remainingVolume, listing.volumeTco2e);
+      
+      // Get organization details for the match
+      const orgDetails = await db.select({
+        id: organizations.id,
+        name: organizations.name,
+        country: organizations.country
+      })
+      .from(organizations)
+      .where(eq(organizations.id, listing.organizationId))
+      .limit(1);
+
+      matches.push({
+        listing: {
+          ...listing,
+          organization: orgDetails[0] || null
+        },
+        matchVolume: matchVolume,
+        pricePerTon: listing.pricePerTon,
+        totalValue: matchVolume * listing.pricePerTon
+      });
+
+      totalMatchedVolume += matchVolume;
+      remainingVolume -= matchVolume;
+    }
+
+    // If createOrder is true and we have matches, create a trade order for the best match
+    let createdOrder = null;
+    if (createOrder && matches.length > 0) {
+      const bestMatch = matches[0];
+      const now = Date.now();
+
+      const orderData = {
+        listingId: bestMatch.listing.id,
+        buyerOrgId: side === 'BUY' ? parseInt(organizationId) : bestMatch.listing.organizationId,
+        sellerOrgId: side === 'SELL' ? parseInt(organizationId) : bestMatch.listing.organizationId,
+        volumeTco2e: bestMatch.matchVolume,
+        pricePerTon: bestMatch.pricePerTon,
+        status: 'PENDING',
+        createdAt: now,
+        updatedAt: now
+      };
+
+      const newOrder = await db.insert(tradeOrders)
+        .values(orderData)
+        .returning();
+
+      createdOrder = {
+        order: newOrder[0],
+        listing: bestMatch.listing
+      };
+    }
+
+    const response = {
+      matches: matches,
+      totalMatchedVolume: totalMatchedVolume,
+      requestedVolume: requestedVolume,
+      fulfillmentRate: totalMatchedVolume / requestedVolume,
+      matchCount: matches.length,
+      ...(createdOrder && { createdOrder })
+    };
+
+    return NextResponse.json(response, { status: 200 });
 
   } catch (error) {
-    console.error('POST /api/marketplace/match error:', error);
+    console.error('POST marketplace match error:', error);
     return NextResponse.json({
       error: 'Internal server error: ' + error,
       code: 'SERVER_ERROR'
     }, { status: 500 });
   }
+}
+
+export async function GET(request: NextRequest) {
+  return NextResponse.json({
+    error: 'Method not allowed',
+    code: 'METHOD_NOT_ALLOWED'
+  }, { status: 405 });
+}
+
+export async function PUT(request: NextRequest) {
+  return NextResponse.json({
+    error: 'Method not allowed',
+    code: 'METHOD_NOT_ALLOWED'
+  }, { status: 405 });
+}
+
+export async function DELETE(request: NextRequest) {
+  return NextResponse.json({
+    error: 'Method not allowed',
+    code: 'METHOD_NOT_ALLOWED'
+  }, { status: 405 });
 }

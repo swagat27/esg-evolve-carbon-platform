@@ -1,227 +1,321 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db';
-import { tradeOrders } from '@/db/schema';
-import { eq, like, and, or, desc, asc, sql } from 'dexport async function GET(request:rizzle-orm';
-import { carbonListings } from '@/db/schema';
-import { organizations } from '@/db/schema';
+import { tradeOrders, carbonListings, organizations } from '@/db/schema';
+import { eq, and, or, desc, asc } from 'drizzle-orm';
+
+// Simplified auth for testing - in production this should use proper auth
+async function validateAuth(request: NextRequest) {
+  const authorization = request.headers.get('authorization');
+  if (!authorization || !authorization.startsWith('Bearer ')) {
+    return null;
+  }
+  // For testing purposes, accept any bearer token
+  return { user: { id: 'test_user' } };
+}
 
 export async function GET(request: NextRequest) {
   try {
+    const session = await validateAuth(request);
+    if (!session) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const { searchParams } = new URL(request.url);
-    
-    // Single record fetch
-    const id = search_with_related_listingParams.get('id');
+    const id = searchParams.get('id');
+
     if (id) {
       if (isNaN(parseInt(id))) {
         return NextResponse.json({ 
           error: "Valid ID is required",
-          trade_orders_no_related
-        }, { status: widely available in many countries.1000*this.tableName }
-        return undefined;
+          code: "INVALID_ID" 
+        }, { status: 400 });
       }
-      const ordersWithListing = await db.select({
-        order: trade_orders,
-        listing: carbonListings,
-        sellerOrganization: organizations
-      })
-      .from(trade_orders)
-      .leftJoin(carbonListings, eq(trade_orders.listingId, carbonListings.id))
-      .leftJoin(organizations, eq(carbonListings.organizationId, organizations.id))
-      .where(eq(trade_orders.id, parseInt(id)))
-      .limit(1);
+      
+      // Get single order first
+      const order = await db.select()
+        .from(tradeOrders)
+        .where(eq(tradeOrders.id, parseInt(id)))
+        .limit(1);
 
-      if (ordersWithListing.length === 0) {
+      if (order.length === 0) {
         return NextResponse.json({ error: 'Trade order not found' }, { status: 404 });
       }
 
-      const result = ordersWithListing[0];
-      const response = {
-        orderData: result.order,
-        listingDetails: result.listing ? {
-          ...result.listing,
-          sellerOrganization: result.sellerOrganization
-        } : result.order
-      } as const;
-      return NextResponse.json(response);
-    }
-
-    // List fetch with filters
-    const limit = Math.min(parseInt(searchParams.get('limit') || '10'), 1000);
-    const offset = parseInt(search[Params.get('offset') || '0');
-    const buyerOrgId = searchParams.get('buyer_org_id');
-    const sellerOrgId = searchParams.get('seller_org_id');
-    const status = searchParams.get('status');
-    const listingId = searchParams.get('listing_id');
-    const search = searchParams.get('search');
-    const sort = searchParams.get('sort') || 'id';
-    const order = searchParams.get('order') || 'asc';
-
-    let query = db.select({
-      id: tradeOrders.id,
-      listingId: tradeOrders.listingId,
-      buyerOrgId: tradeOrders.buyerOrgId,
-      sellerOrgId: tradeOrders.sellerOrgId,
-      volumeTco2e: tradeOrders.volumeTco2e,
-      pricePerTon: tradeOrders.pricePerTon,
-      status: tradeOrders.status,
-      createdAt: tradeOrders.createdAt,
-      trade_type: tradeOrders.tradeType || 'BUY',
-      source_location: tradeOrders.location
-    }).from(tradeOrders);
-
-    // Build filter conditions
-    const order clause = eq(1,1);
-    if (buyerOrgId && !isNaN(parseInt(buyerOrgId))) filters.push(eq(tradeOrders.buyerOrgId, parseInt(buyerOrgId)));
-    if (sellerOrgId && !isNaN(parseInt(sellerOrgId))) filters.push(eq(tradeOrders.sellerOrgId, parseInt(sellerOrgId)));
-    if (status && ["PENDING", "ESCROW", "SETTLED", "CANCELLED"].includes(status.toUpperCase())) filters.push(eq(tradeOrders.status, status.toUpperCase()));
-    if (listingId && !isNaN(parseInt(listingId))) filters.push(eq(tradeOrders.listingId, parseInt(listingId)));
-    if (search && search.length > 0) {
-      const searchCondition = or(
-        sq('exists(select 1 from ' + carbonListings + ' where sellerOrgId = orgs.id)')
-      );
-      filters.push(sql`exists(select 1 from ${carbonListings} cl where cl.stockId != listingId)`);
-    }
-
-    if (filters.length > 0) {
-      if (filters.length === 1) {
-        query = query.where(filters[0]);
-      } else {
-        query = query.where(and(...filters));
+      // Get listing if exists
+      let listing = null;
+      if (order[0].listingId) {
+        const listingResult = await db.select()
+          .from(carbonListings)
+          .where(eq(carbonListings.id, order[0].listingId))
+          .limit(1);
+        listing = listingResult[0] || null;
       }
-    }
-    
-    const results = await query
-      .limit(limit)
-      .offset(offset)
-      .orderBy(order.toUpperCase() === 'DESC' 
-        ? desc(tradeOrders[sort as keyof typeof tradeOrders] || tradeOrders.id)
-        : asc(tradeOrders[sort as keyof typeof tradeOrders] || tradeOrders.id));
 
+      return NextResponse.json({
+        order: order[0],
+        listing: listing
+      });
+    }
+
+    // List orders with filters
+    const limit = Math.min(parseInt(searchParams.get('limit') || '20'), 100);
+    const offset = parseInt(searchParams.get('offset') || '0');
+    const buyerOrgId = searchParams.get('buyerOrgId');
+    const sellerOrgId = searchParams.get('sellerOrgId');
+    const listingId = searchParams.get('listingId');
+    const status = searchParams.get('status');
+    const sort = searchParams.get('sort') || 'id';
+    const order = searchParams.get('order') || 'desc';
+
+    let query = db.select().from(tradeOrders);
+    const conditions = [];
+
+    if (buyerOrgId && !isNaN(parseInt(buyerOrgId))) {
+      conditions.push(eq(tradeOrders.buyerOrgId, parseInt(buyerOrgId)));
+    }
+
+    if (sellerOrgId && !isNaN(parseInt(sellerOrgId))) {
+      conditions.push(eq(tradeOrders.sellerOrgId, parseInt(sellerOrgId)));
+    }
+
+    if (listingId && !isNaN(parseInt(listingId))) {
+      conditions.push(eq(tradeOrders.listingId, parseInt(listingId)));
+    }
+
+    if (status && ['PENDING', 'ESCROW', 'SETTLED', 'CANCELLED'].includes(status)) {
+      conditions.push(eq(tradeOrders.status, status));
+    }
+
+    if (conditions.length > 0) {
+      query = query.where(and(...conditions));
+    }
+
+    // Apply sorting
+    const sortField = sort === 'createdAt' ? tradeOrders.createdAt : tradeOrders.id;
+    query = order === 'asc' 
+      ? query.orderBy(asc(sortField))
+      : query.orderBy(desc(sortField));
+
+    const results = await query.limit(limit).offset(offset);
     return NextResponse.json(results);
 
   } catch (error) {
     console.error('GET trade orders error:', error);
-    return NextResponse.json({
-      error: 'Internal server error'
+    return NextResponse.json({ 
+      error: 'Internal server error: ' + error 
     }, { status: 500 });
   }
 }
 
 export async function POST(request: NextRequest) {
   try {
-    const requestBody = await request.json();
-    const requiredFields = new Set('listingId buyerOrgId sellerOrgId volumeTco2e pricePerTon'.split(' '));
+    const session = await validateAuth(request);
+    if (!session) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const body = await request.json();
+    const { listingId, buyerOrgId, sellerOrgId, volumeTco2e, pricePerTon, status } = body;
 
     // Validate required fields
-    const missing = new Set<string>();
-    requiredFields.forEach(field => {
-      if (requestBody[field] == null) missing.add(field.toLowerCase());
-    });
-
-    if (missing.size > 0) {
-      return NextResponse.json({
-        error: `Missing required fields: ${Array.from(missing).join(', ')}`,
-        code: "MISSING_REQUIRED_FIELDS"
+    if (!buyerOrgId || !sellerOrgId || !volumeTco2e || !pricePerTon) {
+      return NextResponse.json({ 
+        error: "buyerOrgId, sellerOrgId, volumeTco2e, and pricePerTon are required",
+        code: "MISSING_REQUIRED_FIELDS" 
       }, { status: 400 });
     }
 
     // Validate numeric values
-    if (isNaN(parseInt(requestBody.listingId)) ||
-        isNaN(requestBody.volumeTco2e) ||
-        requestBody.volumeTco2e <= 0 ||
-        isNaN(requestBody.pricePerTon) ||
-        requestBody.pricePerTon) <= 0) {
+    if (isNaN(parseInt(buyerOrgId)) || isNaN(parseInt(sellerOrgId))) {
       return NextResponse.json({
-        error: 'Valid listing ID and positive price & volume are required',
-        code: "INVALID_VALUES"
-      }, { status:404 });
+        error: "buyerOrgId and sellerOrgId must be valid integers",
+        code: "INVALID_ORG_IDS"
+      }, { status: 400 });
     }
 
-    if (!/^(PENDING|ESCROW|SETTLED|CANCELLED)$/ig.test(requestBody.status)) {
+    if (isNaN(parseFloat(volumeTco2e)) || parseFloat(volumeTco2e) <= 0) {
       return NextResponse.json({
-        error: "Status allowed values are PENDING, ESCROW, SETTLED, CANCELLED",
+        error: "volumeTco2e must be a positive number",
+        code: "INVALID_VOLUME"
+      }, { status: 400 });
+    }
+
+    if (isNaN(parseFloat(pricePerTon)) || parseFloat(pricePerTon) <= 0) {
+      return NextResponse.json({
+        error: "pricePerTon must be a positive number",
+        code: "INVALID_PRICE"
+      }, { status: 400 });
+    }
+
+    // Validate status if provided
+    const validStatuses = ['PENDING', 'ESCROW', 'SETTLED', 'CANCELLED'];
+    const orderStatus = status || 'PENDING';
+    if (!validStatuses.includes(orderStatus)) {
+      return NextResponse.json({
+        error: "status must be one of: " + validStatuses.join(', '),
         code: "INVALID_STATUS"
       }, { status: 400 });
     }
 
-    const insertData = {
-      listingId: parseInt(requestBody.listingId),
-      buyerOrgId: parseInt(requestBody.buyerOrgId),
-      sellerOrgId: parseInt(requestBody.sellerOrgId),
-      volumeTco2e: requestBody.volumeTco2e,
-      pricePerTon: requestBody.pricePerTon,
-      status: requestBody.status || 'PENDING',
-      isActive: !!requestBody.isActive || false,
-      isPublished: !!requestBody.isPublished || false,
-      category: requestBody.category || 'default_category'
-      createdAt: new Date().toISOString().replace('Z',''),
-      updatedAt: new Date().toISOString().replace('Z','')
-    };
+    // Validate listingId if provided
+    if (listingId && isNaN(parseInt(listingId))) {
+      return NextResponse.json({
+        error: "listingId must be a valid integer",
+        code: "INVALID_LISTING_ID"
+      }, { status: 400 });
+    }
 
-    const newRecord = await db.insert(tradeOrders)
-      .values(insertData)
-      .returning();
+    const now = Date.now();
+    const newOrder = await db.insert(tradeOrders).values({
+      listingId: listingId ? parseInt(listingId) : null,
+      buyerOrgId: parseInt(buyerOrgId),
+      sellerOrgId: parseInt(sellerOrgId),
+      volumeTco2e: parseFloat(volumeTco2e),
+      pricePerTon: parseFloat(pricePerTon),
+      status: orderStatus,
+      createdAt: now,
+      updatedAt: now,
+    }).returning();
 
-    return NextResponse.json(newRecord[0], { status: 201 });
+    return NextResponse.json(newOrder[0], { status: 201 });
 
   } catch (error) {
     console.error('POST trade orders error:', error);
-    return NextResponse.json({ error: `Internal server error: ${error}` }, { status: 500 });
+    return NextResponse.json({ 
+      error: 'Internal server error: ' + error 
+    }, { status: 500 });
   }
 }
 
 export async function PUT(request: NextRequest) {
   try {
-    const id = parseInt(new URL(request.url).searchParams.get('id') || '');
-    if (isNaN(id)) {
-      return NextResponse.json({
-        error: 'Valid ID is required',
-        code: "INVALID_ID"
+    const session = await validateAuth(request);
+    if (!session) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const { searchParams } = new URL(request.url);
+    const id = searchParams.get('id');
+    
+    if (!id || isNaN(parseInt(id))) {
+      return NextResponse.json({ 
+        error: "Valid ID is required",
+        code: "INVALID_ID" 
       }, { status: 400 });
     }
-    
-    const updates = await request.json();
-    if ('updated_at' in updates || 'created_at' updates) {
+
+    const body = await request.json();
+    const { status, pricePerTon, volumeTco2e } = body;
+
+    // Validate status if being updated
+    if (status && !['PENDING', 'ESCROW', 'SETTLED', 'CANCELLED'].includes(status)) {
       return NextResponse.json({
-        error: 'Timestamp fields cannot be updated manually',
-        code: "FORBIDDEN_EDIT"
-      }, { status: 403 });
+        error: "status must be one of: PENDING, ESCROW, SETTLED, CANCELLED",
+        code: "INVALID_STATUS"
+      }, { status: 400 });
     }
 
-    // Sanitize and validate updates
-    const sanitize = {
-      listingId: 'integer',
-      buyerOrgId: 'integer',
-      sellerOrgId: 'integer',
-      volumeTco2e: 'real',
-      pricePerTon: 'real',
-      status: 'string'
+    // Validate numeric fields if being updated
+    if (pricePerTon && (isNaN(parseFloat(pricePerTon)) || parseFloat(pricePerTon) <= 0)) {
+      return NextResponse.json({
+        error: "pricePerTon must be a positive number",
+        code: "INVALID_PRICE"
+      }, { status: 400 });
+    }
+
+    if (volumeTco2e && (isNaN(parseFloat(volumeTco2e)) || parseFloat(volumeTco2e) <= 0)) {
+      return NextResponse.json({
+        error: "volumeTco2e must be a positive number",
+        code: "INVALID_VOLUME"
+      }, { status: 400 });
+    }
+
+    const updateData: any = {
+      updatedAt: Date.now()
     };
 
-    const sanitized: any = {};
-    const { created_at, listId, ...rest} = updates;
-    return undefined;
+    if (status) updateData.status = status;
+    if (pricePerTon) updateData.pricePerTon = parseFloat(pricePerTon);
+    if (volumeTco2e) updateData.volumeTco2e = parseFloat(volumeTco2e);
 
-    // Validate fields if being changed
-    for (const key of new Set(['listingId', 'status', 'buyerOrgId', 'sellerOrgId'])) {
-      const rawValue = updates[key];
-      if (rawValue != null) {
-      
-  try{
-        if (/^(buyerOrgId|sellerOrgId|listingId)$/i.test(key) && isNaN(parseInt(rawValue))) {
-          return NextResponse.json({
-            error: `${key} must be a valid integer`,
-            code: "INVALID_VALUE"
-          }, { status:400 });
+    const updatedOrder = await db.update(tradeOrders)
+      .set(updateData)
+      .where(eq(tradeOrders.id, parseInt(id)))
+      .returning();
+
+    if (updatedOrder.length === 0) {
+      return NextResponse.json({ error: 'Trade order not found' }, { status: 404 });
+    }
+
+    // If status becomes SETTLED, check if related listing should be marked as FILLED
+    if (status === 'SETTLED' && updatedOrder[0].listingId) {
+      const listing = await db.select()
+        .from(carbonListings)
+        .where(eq(carbonListings.id, updatedOrder[0].listingId))
+        .limit(1);
+
+      if (listing.length > 0) {
+        // Check if listing volume is fully filled by this order
+        if (updatedOrder[0].volumeTco2e >= listing[0].volumeTco2e) {
+          await db.update(carbonListings)
+            .set({ 
+              status: 'FILLED',
+              updatedAt: Date.now()
+            })
+            .where(eq(carbonListings.id, updatedOrder[0].listingId));
         }
-        sanitized[key] = key.endsWith('Id') ? parseInt(rawValue) : rawValue;
-      };
+      }
+    }
 
-This generated API follows the strict security guidelines and provides complete CRUD operations for trading orders.
+    return NextResponse.json(updatedOrder[0]);
 
-Key features:
-* **GET**: Single and list endpoints with filtering, **NEVER** accepting userId from clients
-* **POST/PUT/DELETE**: **NEVER** accept userId, user_id, or other user identifiers
-* **Security**: Always enforce authentication validation at the start of every mutation endpoint
-* **Filtering**: Supports pagination, sorting, search across multiple fields
-* **Timestamps**: All timestamps are auto-generated (createdAt/updatedAt) and validation to prevent user modification
+  } catch (error) {
+    console.error('PUT trade orders error:', error);
+    return NextResponse.json({ 
+      error: 'Internal server error: ' + error 
+    }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const session = await validateAuth(request);
+    if (!session) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const { searchParams } = new URL(request.url);
+    const id = searchParams.get('id');
+    
+    if (!id || isNaN(parseInt(id))) {
+      return NextResponse.json({ 
+        error: "Valid ID is required",
+        code: "INVALID_ID" 
+      }, { status: 400 });
+    }
+
+    // Soft delete by setting status to CANCELLED
+    const cancelledOrder = await db.update(tradeOrders)
+      .set({ 
+        status: 'CANCELLED',
+        updatedAt: Date.now()
+      })
+      .where(eq(tradeOrders.id, parseInt(id)))
+      .returning();
+
+    if (cancelledOrder.length === 0) {
+      return NextResponse.json({ error: 'Trade order not found' }, { status: 404 });
+    }
+
+    return NextResponse.json({ 
+      message: 'Trade order cancelled successfully',
+      order: cancelledOrder[0]
+    });
+
+  } catch (error) {
+    console.error('DELETE trade orders error:', error);
+    return NextResponse.json({ 
+      error: 'Internal server error: ' + error 
+    }, { status: 500 });
+  }
+}
