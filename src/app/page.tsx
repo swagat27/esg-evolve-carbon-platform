@@ -234,13 +234,13 @@ function SiteHeader({ userEmail }: {userEmail: string;}) {
         }}>
 
         <div className="w-full h-full bg-black/40">
-          <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 h-full flex items-center justify-between !text-black !opacity-100">
+          <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 h-full flex items-center justify-between !text-black !opacity-100 !bg-[url(https://slelguoygbfzlpylpxfs.supabase.co/storage/v1/object/public/project-uploads/5ef3f0ad-aaae-44e0-96e1-b173a1e4d4a9/visual-edit-uploads/1758056454567-3d8oeb9hm0b.jpg)] !bg-cover !bg-center">
             <div className="text-white">
               <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight">ESG Evolve</h1>
               <p className="opacity-90">Carbon Quota Brokerage & Compliance Advisory Platform</p>
             </div>
             <Image
-              src="/window.svg"
+              src=""
               alt="ESG Evolve platform illustration"
               width={180}
               height={110}
