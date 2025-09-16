@@ -228,7 +228,7 @@ function SiteHeader({ userEmail }: { userEmail: string }) {
         className="h-[220px] w-full bg-cover bg-center"
         style={{
           backgroundImage:
-            'url(https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?q=80&w=2000&auto=format&fit=crop)'
+            'url(/globe.svg)'
         }}
       >
         <div className="w-full h-full bg-black/40">
@@ -299,8 +299,8 @@ function PublicHero() {
         </div>
         <div className="rounded-xl overflow-hidden shadow">
           <img
-            src="https://images.unsplash.com/photo-1496307042754-b4aa456c4a2d?q=80&w=2000&auto=format&fit=crop"
-            alt="Sustainable energy"
+            src="/window.svg"
+            alt="ESG Evolve platform illustration"
             className="w-full h-full object-cover"
           />
         </div>
