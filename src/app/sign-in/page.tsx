@@ -1,11 +1,19 @@
 "use client"
 
-import { useState } from "react";
+import { useState, Suspense } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { authClient } from "@/lib/auth-client";
 
 export default function SignInPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen grid place-items-center">Loading...</div>}>
+      <SignInContent />
+    </Suspense>
+  );
+}
+
+function SignInContent() {
   const router = useRouter();
   const params = useSearchParams();
   const [email, setEmail] = useState("");
@@ -32,7 +40,6 @@ export default function SignInPage() {
         setLoading(false);
         return;
       }
-      // Token stored via client plugin
       router.push("/");
     } catch (err: any) {
       setError(err?.message || "Sign in failed");
@@ -82,6 +89,7 @@ export default function SignInPage() {
                 onChange={(e) => setPassword(e.target.value)}
                 className="w-full px-3 py-2 rounded-md border bg-transparent"
                 placeholder="••••••••"
+                autoComplete="off"
               />
             </div>
 
