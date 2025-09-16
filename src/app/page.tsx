@@ -234,7 +234,7 @@ function SiteHeader({ userEmail }: {userEmail: string;}) {
         }}>
 
         <div className="w-full h-full bg-black/40">
-          <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 h-full flex items-center justify-between !text-black">
+          <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 h-full flex items-center justify-between !text-black !opacity-100">
             <div className="text-white">
               <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight">ESG Evolve</h1>
               <p className="opacity-90">Carbon Quota Brokerage & Compliance Advisory Platform</p>
