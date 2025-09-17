@@ -30,16 +30,26 @@ function SignInContent() {
     setError(null);
     try {
       const { error } = await authClient.signIn.email({
-        email,
-        password,
+        email: email.trim(),
+        password: password.trim(),
         rememberMe,
         callbackURL: "/",
       });
-      if (error) {
-        setError("Invalid email or password.");
+
+      if (error?.code) {
+        const errorMap: Record<string, string> = {
+          INVALID_CREDENTIALS: "Invalid email or password. Please try again.",
+          USER_NOT_FOUND: "No account found for this email. Please register first.",
+          EMAIL_NOT_VERIFIED: "Email not verified. Please check your inbox for the verification link.",
+          TOO_MANY_REQUESTS: "Too many attempts. Please wait a moment and try again.",
+        };
+        setError(errorMap[error.code] || "Sign in failed. Please make sure you have already registered and try again.");
         setLoading(false);
         return;
       }
+
+      // Success
+      setLoading(false);
       router.push("/");
     } catch (err: any) {
       setError(err?.message || "Sign in failed");
